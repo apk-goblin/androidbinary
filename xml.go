@@ -15,6 +15,7 @@ type XMLFile struct {
 	notPrecessedNS map[ResStringPoolRef]ResStringPoolRef
 	namespaces     xmlNamespaces
 	xmlBuffer      bytes.Buffer
+	resourceIds    []ResStringPoolRef
 }
 
 type InvalidReferenceError struct {
@@ -158,6 +159,8 @@ func (f *XMLFile) readChunk(r io.ReaderAt, offset int64) (*ResChunkHeader, error
 	switch chunkHeader.Type {
 	case ResStringPoolChunkType:
 		f.stringPool, err = readStringPool(sr)
+	case ResXMLResourceMapType:
+		err = f.readResourceIds(sr)
 	case ResXMLStartNamespaceType:
 		err = f.readStartNamespace(sr)
 	case ResXMLEndNamespaceType:
@@ -182,6 +185,24 @@ func (f *XMLFile) GetString(ref ResStringPoolRef) string {
 
 func (f *XMLFile) HasString(ref ResStringPoolRef) bool {
 	return f.stringPool.HasString(ref)
+}
+func (f *XMLFile) readResourceIds(sr *io.SectionReader) error {
+	header := new(ResXMLTreeNode)
+	if err := binary.Read(sr, binary.LittleEndian, header); err != nil {
+		return err
+	}
+
+	if _, err := sr.Seek(int64(header.Header.HeaderSize), io.SeekStart); err != nil {
+		return err
+	}
+	var id ResStringPoolRef
+	for i := uint32(0); i < (header.Header.Size/4 - 2); i++ {
+		if err := binary.Read(sr, binary.LittleEndian, &id); err != nil {
+			return err
+		}
+		f.resourceIds = append(f.resourceIds, id)
+	}
+	return nil
 }
 
 func (f *XMLFile) readStartNamespace(sr *io.SectionReader) error {
@@ -224,23 +245,22 @@ func (f *XMLFile) readEndNamespace(sr *io.SectionReader) error {
 }
 
 func (f *XMLFile) addNamespacePrefix(ns, name ResStringPoolRef) (string, error) {
-	if !f.HasString(name) {
-		return "", &InvalidReferenceError{Ref: name}
+	var attrName, prefix string
+	if name < ResStringPoolRef(len(f.resourceIds)) {
+		attrName = getAttributteName(f.resourceIds[name])
+		prefix = "android"
 	}
-
+	if attrName == "" {
+		attrName = f.GetString(name)
+	}
 	if ns != NilResStringPoolRef {
-		ref := f.namespaces.get(ns)
-		if ref == 0 {
-			return "", &InvalidReferenceError{Ref: ns}
+		if f.namespaces.get(ns) != 0 {
+			prefix = f.GetString(f.namespaces.get(ns))
 		}
-		if !f.HasString(ref) {
-			return "", &InvalidReferenceError{Ref: ref}
-		}
-		prefix := f.GetString(ref)
-
-		return fmt.Sprintf("%s:%s", prefix, f.GetString(name)), nil
+		return fmt.Sprintf("%s:%s", prefix, attrName), nil
+	} else {
+		return attrName, nil
 	}
-	return f.GetString(name), nil
 }
 
 func (f *XMLFile) readStartElement(sr *io.SectionReader) error {
