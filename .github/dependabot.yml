@@ -10,3 +10,10 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    groups:
+      codeql-actions:
+        patterns:
+          - "github/codeql-action/*"
+      actions-go-fuzz:
+        patterns:
+          - "shogo82148/actions-go-fuzz/*"
